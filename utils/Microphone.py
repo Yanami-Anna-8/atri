@@ -1,10 +1,10 @@
 import asyncio
 import edge_tts
 import pygame
-import os
 import time
-import utils.ear as ear
-from utils.mouth import speak
+from . import ear 
+from .mouth import speak
+import os
 
 LOCK_PATH = os.path.dirname(os.path.abspath(__file__))
 
