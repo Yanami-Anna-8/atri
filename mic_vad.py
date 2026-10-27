@@ -10,7 +10,7 @@ CHUNK = 1024 #每个缓冲区帧数
 FORMAT = pyaudio.paInt16 #16位深度
 CHANNELS = 1 #单声道
 RATE = 44100 #采样率
-WAVE_OUTPUT_FILENAME = '\\\wsl.localhost\\Ubuntu-24.04\\home\\hao\\atri\\utils\\input.wav'
+WAVE_OUTPUT_FILENAME = '//wsl.localhost/Ubuntu/home/airhead/my_dear/utils/input.wav' #此处需要更改为你自己电脑上的路径
 LOCK_FILE = 'atri_is_speaking.lock' #互斥锁
 
 def  record_auto():
