@@ -1,19 +1,25 @@
 import os
-from openai import OpenAI
 import re
-from utils.mouth import queue_speak, wait_finish
-import readline
 import json
 import time
-import utils.ear as ear
-from utils.Microphone import Microphone
+from openai import OpenAI
+
+from utils.mouth import queue_speak, wait_finish, actor
 from utils.init import SYSTEM_PROMPT
 from utils.api import use_api
-from func import users_peaking, user_keyboard_input
+from utils.link import link, emit_state, emit_notice
+from utils.interaction import handle_client_message
+from utils.voice import configure_voice
+from func import user_keyboard_input, users_peaking
 
-MEMORY_FILE='memory/memory.json'
+# 获取当前 main.py 所在的绝对目录路径 (即 my_dear 文件夹的路径)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 拼接出绝对路径：/home/airhead/my_dear/memory/memory.json
+MEMORY_FILE = os.path.join(BASE_DIR, 'memory', 'memory.json')
 MEMORY_LIMIT = 20
-SENTENCE_SPLIT = re.compile(r'([\n]+)') #分句正则
+SENTENCE_SPLIT = re.compile(r'([\n]+)') 
+
+# ... (load_memory 和 save_memory 保持原样不变) ...
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -25,6 +31,12 @@ def load_memory():
 
         if not loaded_messages:
             return [{'role':'system', 'content':SYSTEM_PROMPT}]
+
+        # 始终使用最新的 system prompt，避免改了 init.py 但旧记忆里还是旧人设
+        if loaded_messages[0].get('role') == 'system':
+            loaded_messages[0]['content'] = SYSTEM_PROMPT
+        else:
+            loaded_messages.insert(0, {'role':'system', 'content':SYSTEM_PROMPT})
         return loaded_messages
     
     except Exception as e:
@@ -32,115 +44,135 @@ def load_memory():
         return [{'role':'system', 'content':SYSTEM_PROMPT}]
     
 def save_memory(messages):
-    #切片，防止耗费过高
+    """保存记忆，并切片防止Token超限"""
     try:
+        # 【新增】：在保存前，确保 memory 文件夹一定是存在的，不存在就自动建一个
+        os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
+        
         if len(messages) > MEMORY_LIMIT + 1:
             save_content = [messages[0]] + messages[-MEMORY_LIMIT:]
         else:
             save_content = messages
         with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            #ensure_ascil=False中文正常显示
-            #indent=2打开json文件时能看懂
             json.dump(save_content, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f'记忆保存失败{e}')
+        print(f'记忆保存失败: {e}')
+
+def choose_interaction_mode():
+    """模块化：让用户选择交互方式"""
+    print("===================================")
+    print("请选择 ATRI 的交互模式:")
+    print("[1] 键盘打字 (快速启动，无延迟)")
+    print("[2] 语音对话 (需加载语音大模型，稍慢)")
+    print("===================================")
+    while True:
+        choice = input("请输入 1 或 2: ").strip()
+        if choice == '1':
+            return 'keyboard'
+        elif choice == '2':
+            return 'voice'
+        print("输入无效，请重新输入 1 或 2。")
+
+def choose_voice():
+    """选择语音后端；可用环境变量 ATRI_VOICE=edge/gpt 跳过交互。"""
+    forced = os.environ.get('ATRI_VOICE', '').strip().lower()
+    if forced in ('edge', 'gpt'):
+        return forced
+
+    print("===================================")
+    print("请选择 ATRI 的声音:")
+    print("[1] 默认中文 (edge-tts)")
+    print("[2] 日语音色 (GPT-SoVITS，需先启动 api.py)")
+    print("===================================")
+    while True:
+        choice = input("请输入 1 或 2: ").strip()
+        if choice == '1':
+            return 'edge'
+        elif choice == '2':
+            return 'gpt'
+        print("输入无效，请重新输入 1 或 2。")
 
 
 def chat_loop():
-    print("----------ATRI,启动！---------------")
+    link.on_message = handle_client_message
+    link.start()
+    mode = choose_interaction_mode()
+    configure_voice(choose_voice())
+    
+    # 动态加载和初始化模型
+    if mode == 'voice':
+        import utils.ear as ear
+        ear.init_asr_model()
+        print("\n>> 提示: 请确保已在 Windows 端启动 mic_vad.py")
 
+    print("\n----------ATRI,启动！---------------")
     print('----------读取历史记忆中... ---------')
+    
     messages = load_memory()
     cs = 0
-    if len(messages) < 1 :
-        #print("ATRI: 啊~呜（打哈欠），夏生先生，早安")
-        print('Atri: ',end='')
-        queue_speak('啊~呜，夏生先生，早安')
-    else:
-        #print('ATRI: 欸，夏生先生，忙完了吗？快来继续和我聊天吧')
-        print('Atri: ',end='')
-        queue_speak('欸，夏生先生，忙完了吗？快来继续和我聊天吧')
+    opening = '啊~呜，夏生先生，早安' if len(messages) < 1 else '欸，夏生先生，忙完了吗？快来继续和我聊天吧'
+    print('Atri: ', end='')
+    queue_speak(opening)
     wait_finish()
-    while(True):
 
-        # if not os.path.exists("input.wav"):
-        #     time.sleep(0.1) # 没文件就休息 0.1秒，别占满 CPU
-        #     continue
-        # user_input = ear.transcribe("input.wav")
-        # print(f"Me (Voice): {user_input}")
-        # os.remove("input.wav")
-        # #user_input = input('\nMe:')
-
-        # if not user_input or len(user_input.strip()) < 1:
-        #     print(">> 没听清...")
-        #     continue
-
-        # # if user_input.lower() in ['exit']:
-        # #     print('ATRI: 夏生先生，晚安，欸嘿嘿，今天就让高性能的我温暖你的内心吧')
-        # #     speak('夏生先生，晚安，欸嘿嘿，今天就让高性能的我温暖你的内心吧')
-        # #     break
-        # if "关机" in user_input or "再见" in user_input:
-        #     speak("晚安，主人。")
-        #     break
-
-        #messages.append({'role':'user', 'content':user_input})
+    while True:
         wait_finish()
-
         if cs == 0:
             print()
-            cs+=1
-        #键盘输入
-        
-        # state = user_keyboard_input(messages)
-        # if not state : break
+            cs += 1
 
-        #麦克风输入
-        state = users_peaking(messages)
-        if not state : break
-        elif state == 1 : continue
+        # 策略分发：根据模式选择不同的输入流
+        if mode == 'keyboard':
+            state = user_keyboard_input(messages)
+            if state == 0: break # 返回0代表要求退出
+        else:
+            state = users_peaking(messages)
+            if state == 0: break
+            elif state == 1: continue # 没听清，继续监听
 
         try:
+            emit_state('thinking')
             response = use_api(messages)
-
-            # ai_reply = response.choices[0].message.content#获得回复
-            # print(f'ATRI:{ai_reply}')
-            print('ATRI: ',end='',flush=True)
+            print('ATRI: ', end='', flush=True)
             full_reply = ''
             current_sentene = ''
 
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
-                    #不再print内容，而是放到buffer中
                     current_sentene += content
-
-                    parts = SENTENCE_SPLIT.split(current_sentene) #检测是否是一句完整的话,“你好啊”->["你好啊","!",""]
+                    parts = SENTENCE_SPLIT.split(current_sentene)
 
                     if len(parts) > 1 :
-                        sentence = parts[0] + parts[1] #句子+标点
-                        #扔进队列，双线程运行
+                        sentence = parts[0] + parts[1]
                         queue_speak(sentence)
                         full_reply += sentence
+                        current_sentene = ''.join(parts[2:]) 
 
-                        current_sentene = ''.join(parts[2:]) #把剩余的也放到buffer
-
-                    # print(content, end='', flush=True) #打出一个字
-                    # full_reply += content
-            #strip移除字符串头尾指定字符，一般为空格或者换行符
-            if current_sentene.strip(): #如果有没说完的话，也扔进去
+            if current_sentene.strip(): 
                 queue_speak(current_sentene)
                 full_reply += current_sentene
-            # speak(full_reply)
-            #print()
-            wait_finish() #真正实现打断，这里就不用wait，但是先稳一下
+            
+            wait_finish() 
             print()
+            
+            emit_state('idle')
             messages.append({'role':'assistant', 'content':full_reply})
             save_memory(messages)
 
-            #把回复也加入记忆
-            #messages.append({'role':'assistant', 'content':ai_reply})
         except Exception as e:
-            print(f'呜呜，记忆缺失{e}')
+            print(f'呜呜，网络或记忆故障: {e}')
+            emit_notice(f'网络或记忆故障: {e}')
+            emit_state('idle')
 
 if __name__ == '__main__':
-    chat_loop()
+    try:
+        chat_loop()
+    finally:
+        # 优雅退出：防止报错 Actor Error: cannot schedule new futures,然而实际上还是有可能出这个错误···
+        actor.running = False
+        link.stop()
+
+
+    #欸，夏生先生，忙完了吗？快来继续和我聊天吧
+    #ねえ、夏生さん、お仕事終わりましたか？早く続きを話しましょうよ
