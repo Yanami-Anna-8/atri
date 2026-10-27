@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>ATRI Desktop</title>
+    <style>
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; 
+            background-color: transparent !important; 
+        }
+        #canvas { 
+            display: block; width: 100%; height: 100%; 
+        }
+        
+        /* 【UI 控制面板】包含拖拽条和下拉框 */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            opacity: 0; /* 默认隐藏 */
+            transition: opacity 0.3s ease;
+            z-index: 10;
+        }
+
+        /* 鼠标移入网页区域显示面板 */
+        body:hover #ui-panel {
+            opacity: 1;
+        }
+
+        #drag-bar {
+            padding: 8px 24px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 20px;
+            font-family: sans-serif;
+            font-size: 14px;
+            cursor: grab;
+            -webkit-app-region: drag; /* 允许拖拽 */
+            user-select: none;
+        }
+
+        #model-select {
+            padding: 8px 12px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.3);
+            font-family: sans-serif;
+            outline: none;
+            cursor: pointer;
+            -webkit-app-region: no-drag; /* 【关键】下拉框不能被拖拽，否则无法点击 */
+        }
+        
+        #model-select option {
+            background-color: #333;
+            color: white;
+        }
+
+        /* ===== 对话气泡 ===== */
+        #chat-bubble {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, calc(-100% + 10px));
+            max-width: 78%;
+            padding: 10px 16px 12px;
+            border-radius: 16px;
+            background: rgba(16, 16, 24, 0.84);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+            color: #f4f4f8;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            font-size: 15px;
+            line-height: 1.55;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.25s ease, transform 0.25s ease, visibility 0.25s;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        #chat-bubble.visible {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, -100%);
+        }
+
+        #bubble-role {
+            margin-bottom: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: #ffb7c5;
+        }
+
+        #chat-bubble[data-role="user"] #bubble-role { color: #9ad7ff; }
+        #chat-bubble[data-role="system"] #bubble-role { color: #ffd18a; }
+
+        #bubble-text {
+            min-height: 1.2em;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* 右下角连接状态点 */
+        #link-dot {
+            position: fixed;
+            right: 12px;
+            bottom: 12px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.22);
+            z-index: 20;
+            pointer-events: none;
+            transition: background 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        #link-dot.online {
+            background: #4ade80;
+            box-shadow: 0 0 8px rgba(74, 222, 128, 0.85);
+        }
+
+        #link-dot.offline {
+            background: #f87171;
+        }
+
+        /* ===== 聊天框 ===== */
+        #chat-panel {
+            position: fixed;
+            right: 14px;
+            top: 76px;
+            bottom: 96px;
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            background: rgba(16, 16, 24, 0.84);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+            z-index: 8;
+            overflow: hidden;
+            color: #f4f4f8;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        #chat-panel.collapsed {
+            bottom: auto;
+            height: 44px;
+        }
+
+        #chat-panel.collapsed #chat-messages,
+        #chat-panel.collapsed #chat-input-row {
+            display: none;
+        }
+
+        #chat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #ffb7c5;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            user-select: none;
+        }
+
+        #chat-toggle {
+            background: none;
+            border: none;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+        }
+
+        #chat-toggle:hover {
+            color: #fff;
+        }
+
+        #chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        }
+
+        #chat-messages::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        #chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .chat-msg {
+            max-width: 86%;
+            padding: 7px 11px;
+            border-radius: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+
+        .chat-msg.user {
+            align-self: flex-end;
+            background: rgba(90, 170, 220, 0.35);
+            border: 1px solid rgba(120, 200, 255, 0.25);
+        }
+
+        .chat-msg.assistant {
+            align-self: flex-start;
+            background: rgba(255, 150, 190, 0.18);
+            border: 1px solid rgba(255, 183, 197, 0.22);
+        }
+
+        .chat-msg.system {
+            align-self: center;
+            background: rgba(255, 255, 255, 0.06);
+            color: #bbb;
+            font-size: 12px;
+        }
+
+        .chat-msg.typing {
+            color: #aaa;
+            font-style: italic;
+        }
+
+        #chat-input-row {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        #chat-input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 8px;
+            color: #fff;
+            padding: 7px 10px;
+            font-size: 13px;
+            outline: none;
+        }
+
+        #chat-input:focus {
+            border-color: rgba(255, 183, 197, 0.6);
+        }
+
+        #chat-send {
+            background: rgba(255, 183, 197, 0.25);
+            border: 1px solid rgba(255, 183, 197, 0.4);
+            border-radius: 8px;
+            color: #ffd9e2;
+            padding: 0 12px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        #chat-send:hover {
+            background: rgba(255, 183, 197, 0.38);
+        }
+    </style>
+    
+    <script src="./vendor/live2dcubismcore.min.js"></script>
+    <script src="./vendor/pixi.min.js"></script>
+    <script>window.PIXI = PIXI;</script>
+    <script src="./vendor/cubism4.min.js"></script>
+</head>
+<body>
+    <div id="ui-panel">
+        <div id="drag-bar">按住此处拖拽</div>
+        <select id="model-select"></select>
+    </div>
+    
+    <canvas id="canvas"></canvas>
+
+    <!-- 对话气泡：由 Python 端 WebSocket 事件驱动 -->
+    <div id="chat-bubble">
+        <div id="bubble-role">ATRI</div>
+        <div id="bubble-text"></div>
+    </div>
+    <div id="link-dot" title="桌宠连接状态"></div>
+
+    <!-- 聊天框 -->
+    <div id="chat-panel">
+        <div id="chat-header">
+            <span id="chat-title">ATRI</span>
+            <button id="chat-toggle" title="折叠/展开">—</button>
+        </div>
+        <div id="chat-messages"></div>
+        <div id="chat-input-row">
+            <input id="chat-input" type="text" placeholder="和亚托莉说点什么…" autocomplete="off" />
+            <button id="chat-send">发送</button>
+        </div>
+    </div>
+    
+    <script>
+        const { ipcRenderer } = require('electron');
+        const fs = require('fs');
+        const path = require('path');
+        const { Application } = PIXI;
+        const { Live2DModel } = PIXI.live2d;
+
+        const app = new Application({
+            view: document.getElementById('canvas'),
+            autoStart: true,
+            resizeTo: window,
+            transparent: true,
+            backgroundAlpha: 0 
+        });
+
+        let atriModel = null;
+        let coreModelRef = null;
+        let currentWatermarkParams = [];
+        
+        // 自动扫描模型目录
+        function scanModels() {
+            // __dirname 获取当前 index.html 所在的绝对路径
+            const modelsDir = path.join(__dirname, 'models');
+            const modelList = [];
+
+            if (!fs.existsSync(modelsDir)) {
+                console.error("未找到 models 文件夹！请在项目根目录创建它。");
+                return modelList;
+            }
+
+            const folders = fs.readdirSync(modelsDir);
+            for (const folder of folders) {
+                const folderPath = path.join(modelsDir, folder);
+                if (fs.statSync(folderPath).isDirectory()) {
+                    // 在文件夹内寻找 .model3.json 文件
+                    const files = fs.readdirSync(folderPath);
+                    const jsonFile = files.find(f => f.endsWith('.model3.json'));
+                    
+                    if (jsonFile) {
+                        // 从 cdi3 里找「水印」相关参数，加载后自动关掉（免费模型的水印）
+                        let watermarkParams = [];
+                        try {
+                            const modelJson = JSON.parse(fs.readFileSync(path.join(folderPath, jsonFile), 'utf-8'));
+                            const displayInfo = modelJson.FileReferences && modelJson.FileReferences.DisplayInfo;
+                            if (displayInfo) {
+                                const cdiPath = path.join(folderPath, displayInfo);
+                                if (fs.existsSync(cdiPath)) {
+                                    const cdi = JSON.parse(fs.readFileSync(cdiPath, 'utf-8'));
+                                    watermarkParams = (cdi.Parameters || [])
+                                        .filter(p => p.Name && p.Name.includes('水印'))
+                                        .map(p => p.Id);
+                                }
+                            }
+                        } catch (err) {
+                            console.warn('读取水印参数失败:', folder, err);
+                        }
+
+                        modelList.push({
+                            name: folder, // 以文件夹名作为展示名
+                            // 构造相对路径，Electron 中加载本地资源相对路径最稳定
+                            url: `./models/${folder}/${jsonFile}`,
+                            watermarkParams
+                        });
+                    }
+                }
+            }
+            return modelList;
+        }
+
+        // 初始化下拉菜单
+        function initSelectMenu(models) {
+            const selectEl = document.getElementById('model-select');
+            
+            if (models.length === 0) {
+                const opt = document.createElement('option');
+                opt.text = "无可用模型";
+                selectEl.add(opt);
+                return;
+            }
+
+            models.forEach(model => {
+                const opt = document.createElement('option');
+                opt.value = model.url;
+                opt.text = model.name;
+                selectEl.add(opt);
+            });
+
+            // 监听下拉框变化，动态切换模型
+            selectEl.addEventListener('change', (e) => {
+                loadModel(e.target.value);
+            });
+
+            // 默认加载第一个模型
+            loadModel(models[0].url);
+        }
+
+        // 加载并渲染模型
+        async function loadModel(modelUrl) {
+            console.log("正在加载模型: ", modelUrl);
+            
+            // 【核心】如果当前已经有模型了，必须先销毁它，释放显存
+            if (atriModel) {
+                app.stage.removeChild(atriModel);
+                atriModel.destroy({ children: true });
+                atriModel = null;
+            }
+
+            try {
+                atriModel = await Live2DModel.from(modelUrl);
+                const modelInfo = availableModels.find(m => m.url === modelUrl);
+                currentWatermarkParams = modelInfo ? modelInfo.watermarkParams : [];
+                app.stage.addChild(atriModel);
+
+                atriModel.scale.set(0.15); // 初始缩放
+                centerModel();
+                coreModelRef = atriModel.internalModel ? atriModel.internalModel.coreModel : null;
+                console.log("模型加载完毕！");
+            } catch (err) {
+                console.error("模型加载失败: ", err);
+            }
+        }
+
+        function centerModel() {
+            if(atriModel) {
+                atriModel.x = (app.renderer.width - atriModel.width) / 2;
+                atriModel.y = (app.renderer.height - atriModel.height) / 2;
+                positionBubble();
+            }
+        }
+
+        // 滚轮缩放
+        window.addEventListener('wheel', (e) => {
+            if(!atriModel) return;
+            const scaleFactor = e.deltaY > 0 ? 0.95 : 1.05;
+            atriModel.scale.set(atriModel.scale.x * scaleFactor);
+            centerModel(); 
+        });
+
+        // 动态鼠标穿透计算（修复：包含下拉框区域）
+        window.addEventListener('pointermove', (e) => {
+            if (!atriModel) return;
+
+            // 获取整个控制面板的区域（包含了拖拽条和下拉框）
+            const uiPanel = document.getElementById('ui-panel');
+            const rect = uiPanel.getBoundingClientRect();
+            const isOverUI = (e.clientX >= rect.left && e.clientX <= rect.right && 
+                              e.clientY >= rect.top && e.clientY <= rect.bottom);
+
+            const bounds = atriModel.getBounds();
+            const isOverModel = bounds.contains(e.clientX, e.clientY);
+
+            // 聊天框也要接收鼠标，否则无法点击输入框
+            const chatPanel = document.getElementById('chat-panel');
+            const chatRect = chatPanel.getBoundingClientRect();
+            const isOverChat = (e.clientX >= chatRect.left && e.clientX <= chatRect.right &&
+                                e.clientY >= chatRect.top && e.clientY <= chatRect.bottom);
+
+            // 模型、控制面板、聊天框任一区域都接收鼠标
+            const shouldIgnore = !(isOverModel || isOverUI || isOverChat);
+            ipcRenderer.send('set-ignore-mouse-events', shouldIgnore);
+        });
+
+        // 主流程启动
+        const availableModels = scanModels();
+        initSelectMenu(availableModels);
+
+        // ================= 与 Python 大脑的通信（A/B 阶段） =================
+        const LINK_URL = 'ws://127.0.0.1:8765';
+        let linkSocket = null;
+        let linkRetryTimer = null;
+        let bubbleTypeTimer = null;
+        let bubbleHideTimer = null;
+        let bubbleStartTimer = null;
+
+        const bubbleEl = document.getElementById('chat-bubble');
+        const bubbleRoleEl = document.getElementById('bubble-role');
+        const bubbleTextEl = document.getElementById('bubble-text');
+        const linkDotEl = document.getElementById('link-dot');
+
+        function setLinkStatus(status) {
+            linkDotEl.classList.toggle('online', status === 'online');
+            linkDotEl.classList.toggle('offline', status === 'offline');
+        }
+
+        function connectLink() {
+            if (linkSocket && (linkSocket.readyState === WebSocket.CONNECTING ||
+                               linkSocket.readyState === WebSocket.OPEN)) return;
+
+            clearTimeout(linkRetryTimer);
+            setLinkStatus('connecting');
+
+            linkSocket = new WebSocket(LINK_URL);
+
+            linkSocket.onopen = () => {
+                setLinkStatus('online');
+                linkSocket.send(JSON.stringify({ type: 'hello', client: 'live2d-pet', version: 1 }));
+                console.log('[link] 已连接 Python 大脑');
+            };
+
+            linkSocket.onmessage = (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch (err) { return; }
+                handleLinkMessage(msg);
+            };
+
+            linkSocket.onclose = () => {
+                setLinkStatus('offline');
+                linkRetryTimer = setTimeout(connectLink, 2000);
+            };
+
+            linkSocket.onerror = () => {};
+        }
+
+        function handleLinkMessage(msg) {
+            if (msg.type === 'chat') {
+                appendChat(msg.role, msg.text);
+                if (msg.role === 'assistant') hideTyping();
+                showBubble(msg.role, msg.text);
+            } else if (msg.type === 'sentence') {
+                // Python 在音频开始播放的同一刻推送；delay 是开头静音 + 播放器启动时间
+                hideTyping();
+                appendChat('assistant', msg.text);
+                showBubble('assistant', msg.text, { duration: msg.duration, delay: msg.delay || 0 });
+                // 表情跟着这句话的时长走，避免说到一半就消失
+                if (playEmote.active) {
+                    clearTimeout(playEmote.resetTimer);
+                    playEmote.resetTimer = setTimeout(resetEmote, ((msg.duration || 5) + 1.2) * 1000);
+                }
+            } else if (msg.type === 'emote') {
+                playEmote(msg.actions);
+                playActionTags(msg.actions);
+            } else if (msg.type === 'mouth') {
+                mouthTarget = Number(msg.value) || 0;
+            } else if (msg.type === 'state') {
+                if (msg.state === 'thinking') {
+                    showTyping();
+                    showBubble('assistant', '……', { autoHide: false });
+                } else if (msg.state === 'idle') {
+                    hideTyping();
+                    mouthTarget = 0;
+                    if (bubbleTextEl.textContent === '……') hideBubble();
+                }
+            } else if (msg.type === 'notice') {
+                hideTyping();
+                appendChat('system', msg.text);
+                showBubble('system', msg.text);
+            }
+        }
+
+        function showBubble(role, text, { autoHide = true, duration = null, delay = 0 } = {}) {
+            const roleNames = { user: '夏生先生', assistant: 'ATRI', system: '系统' };
+            bubbleRoleEl.textContent = roleNames[role] || 'ATRI';
+            bubbleEl.dataset.role = role;
+
+            clearInterval(bubbleTypeTimer);
+            clearTimeout(bubbleHideTimer);
+            clearTimeout(bubbleStartTimer);
+
+            const reveal = () => {
+                bubbleEl.classList.add('visible');
+
+                if (!text) {
+                    if (autoHide) bubbleHideTimer = setTimeout(hideBubble, 4000);
+                    return;
+                }
+
+                let i = 0;
+                bubbleTextEl.textContent = '';
+                positionBubble();
+
+                // 有音频时长就按语音语速打字：跳过开头静音，留 6% 余量让文字略慢于语音
+                const speakSeconds = Math.max(0.3, (duration || 0) - delay);
+                const interval = duration && text.length
+                    ? Math.max(15, (speakSeconds * 1000 / text.length) * 1.06)
+                    : 28;
+
+                bubbleTypeTimer = setInterval(() => {
+                    if (i >= text.length) {
+                        clearInterval(bubbleTypeTimer);
+                        if (autoHide) bubbleHideTimer = setTimeout(hideBubble, 7000);
+                        return;
+                    }
+                    i += 1;
+                    bubbleTextEl.textContent = text.slice(0, i);
+                    positionBubble();
+                }, interval);
+            };
+
+            // delay 期间连气泡框都不出现，等真正开始说话时再一起露出来
+            if (delay > 0) {
+                bubbleStartTimer = setTimeout(reveal, delay * 1000);
+            } else {
+                reveal();
+            }
+        }
+
+        // 气泡跟随模型头顶，并保证不会跑出窗口
+        function positionBubble() {
+            if (!atriModel || !bubbleEl.classList.contains('visible')) return;
+
+            const bounds = atriModel.getBounds();
+            const winW = app.renderer.width;
+            const winH = app.renderer.height;
+            const half = Math.max(120, (bubbleEl.offsetWidth || 260) / 2);
+
+            let cx = bounds.x + bounds.width / 2;
+            cx = Math.min(Math.max(cx, half + 8), winW - half - 8);
+
+            let headY = bounds.y - 10;
+            if (headY < 90) {
+                // 头顶靠上（窗口被裁或模型很大）时，退到模型额头附近
+                headY = Math.min(Math.max(bounds.y + bounds.height * 0.12, 90), winH - 90);
+            }
+
+            bubbleEl.style.left = cx + 'px';
+            bubbleEl.style.top = headY + 'px';
+        }
+
+        function hideBubble() {
+            bubbleEl.classList.remove('visible');
+        }
+
+        function resetEmote() {
+            if (!atriModel) return;
+            const manager = atriModel.internalModel.motionManager.expressionManager;
+            if (manager && manager.resetExpression) manager.resetExpression();
+            playEmote.active = false;
+        }
+
+        // 括号里的动作/情绪 -> 当前模型已注册的表情（按关键词匹配）
+        function playEmote(actions) {
+            if (!atriModel || !Array.isArray(actions) || !actions.length) return;
+
+            const rules = [
+                { keys: ['害羞', '脸红', '红脸', '羞', '泛红', '红晕', '脸烫', '发烫', '不好意思', '难为情', '扭捏'], names: ['脸红', '红脸'] },
+                { keys: ['生气', '气鼓鼓', '怒', '哼', '瞪'], names: ['生气', '黑脸'] },
+                { keys: ['哭', '难过', '伤心', '呜', '泪'], names: ['哭'] },
+                { keys: ['笑', '开心', '高兴', '嘿嘿', '哈哈', '比心'], names: ['比心', '爱心'] },
+                { keys: ['惊讶', '惊喜', '吃惊', '诶', '欸', '瞪大', '星星眼'], names: ['星星', '星星眼'] },
+                { keys: ['无语', '无奈', '叹气'], names: ['- -', '黑脸'] },
+                { keys: ['吐舌', '调皮'], names: ['吐舌'] },
+                { keys: ['口罩', '回避', '躲'], names: ['口罩'] }
+            ];
+
+            const available = (atriModel.internalModel.settings.expressions || [])
+                .map(item => item.Name);
+
+            for (const action of actions) {
+                const rule = rules.find(item => item.keys.some(key => action.includes(key)));
+                if (!rule) continue;
+
+                const name = rule.names.find(candidate => available.includes(candidate));
+                if (!name) continue;
+
+                try {
+                    atriModel.expression(name);
+                    playEmote.active = true;
+                    clearTimeout(playEmote.resetTimer);
+                    playEmote.resetTimer = setTimeout(resetEmote, 6500);
+                    return; // 只应用第一个命中的表情，多个标签不互相覆盖
+                } catch (err) { /* 这个模型没有该表情时忽略 */ }
+            }
+        }
+
+        // ===== 动作：用标准参数做点头/摇头/转头等 =====
+        // 鼠标跟随也写这些参数，所以动作参数必须在模型 update 前覆盖（见 updateAction 的绑定）
+        const ACTION_PRESETS = {
+            '点头': { duration: 0.9, curve: p => ({ ParamAngleY: -18 * Math.sin(Math.PI * p) }) },
+            '摇头': { duration: 1.1, curve: p => ({ ParamAngleX: 18 * Math.sin(2 * Math.PI * p) }) },
+            '转头': { duration: 1.4, curve: p => ({ ParamAngleX: 20 * Math.sin(Math.PI * p) }) },
+            '歪头': { duration: 1.0, curve: p => ({ ParamAngleZ: 14 * Math.sin(Math.PI * p) }) },
+            '低头': { duration: 1.2, curve: p => ({ ParamAngleY: -22 * Math.sin(Math.PI * p), ParamBodyAngleX: 4 * Math.sin(Math.PI * p) }) },
+            '前倾': { duration: 1.0, curve: p => ({ ParamBodyAngleX: 8 * Math.sin(Math.PI * p) }) },
+            '后退': { duration: 1.0, curve: p => ({ ParamBodyAngleX: -8 * Math.sin(Math.PI * p), ParamAngleY: 5 * Math.sin(Math.PI * p) }) }
+        };
+
+        let activeAction = null;
+
+        function playAction(name) {
+            const preset = ACTION_PRESETS[name];
+            if (!preset) return;
+            activeAction = { preset, started: performance.now() / 1000 };
+        }
+
+        function playActionTags(actions) {
+            if (!Array.isArray(actions)) return;
+            for (const action of actions) {
+                if (ACTION_PRESETS[action]) {
+                    playAction(action);
+                    return; // 一次只做一个动作
+                }
+            }
+        }
+
+        function updateAction() {
+            if (!coreModelRef || !activeAction) return;
+            const elapsed = performance.now() / 1000 - activeAction.started;
+            const progress = Math.min(1, elapsed / activeAction.preset.duration);
+            const values = activeAction.preset.curve(progress);
+            for (const param in values) {
+                try { coreModelRef.setParameterValueById(param, values[param]); } catch (err) {}
+            }
+            // 鼠标跟随在模型 update 里写同名参数，这里是 update 之后，重算一次才生效
+            coreModelRef.update();
+            if (progress >= 1) activeAction = null;
+        }
+
+        app.ticker.add(updateAction, null, PIXI.UPDATE_PRIORITY.LOW);
+
+        // 口型：Python 推送 0~1 音量包络，这里平滑后写入 ParamMouthOpenY
+        let mouthTarget = 0;
+        let mouthValue = 0;
+
+        app.ticker.add(() => {
+            if (!coreModelRef) return;
+
+            // 免费模型水印：cdi3 里名字带「水印」的参数，设为 1 即隐藏
+            for (const id of currentWatermarkParams) {
+                try { coreModelRef.setParameterValueById(id, 1); } catch (err) {}
+            }
+
+            mouthValue += (mouthTarget - mouthValue) * 0.45;
+            try {
+                coreModelRef.setParameterValueById('ParamMouthOpenY',
+                    Math.max(0, Math.min(1, mouthValue)));
+            } catch (err) { /* 模型没有该参数时忽略 */ }
+        }, null, PIXI.UPDATE_PRIORITY.HIGH);
+
+        window.addEventListener('resize', positionBubble);
+
+        // ===== 点击互动：摸头 / 戳脸 =====
+        let lastPokeAt = 0;
+
+        function handlePoke(target) {
+            const now = Date.now();
+            if (now - lastPokeAt < 800) return;
+            lastPokeAt = now;
+
+            // 本地立即给反馈，不用等 Python 回复
+            if (target === 'head') {
+                playEmote(['害羞']);
+                playAction('歪头');
+            } else if (target === 'face') {
+                playEmote(['生气']);
+                playAction('转头');
+            }
+
+            if (linkSocket && linkSocket.readyState === WebSocket.OPEN) {
+                linkSocket.send(JSON.stringify({ type: 'poke', target }));
+            }
+        }
+
+        document.getElementById('canvas').addEventListener('click', (event) => {
+            if (!atriModel) return;
+
+            const bounds = atriModel.getBounds();
+            if (!bounds.contains(event.clientX, event.clientY)) return;
+
+            const relX = (event.clientX - bounds.x) / bounds.width;
+            const relY = (event.clientY - bounds.y) / bounds.height;
+
+            if (relY < 0.15) {
+                handlePoke('head');
+            } else if (relY < 0.32 && relX > 0.34 && relX < 0.66) {
+                handlePoke('face');
+            }
+        });
+
+        // ===== 聊天框 =====
+        const chatPanel = document.getElementById('chat-panel');
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        let typingEl = null;
+
+        function appendChat(role, text) {
+            if (!text) return;
+            const div = document.createElement('div');
+            div.className = 'chat-msg ' + role;
+            div.textContent = text;
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return div;
+        }
+
+        function showTyping() {
+            if (typingEl) return;
+            typingEl = document.createElement('div');
+            typingEl.className = 'chat-msg assistant typing';
+            typingEl.textContent = '正在输入…';
+            chatMessages.appendChild(typingEl);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function hideTyping() {
+            if (typingEl) {
+                typingEl.remove();
+                typingEl = null;
+            }
+        }
+
+        function sendChat() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+
+            appendChat('user', text);
+            chatInput.value = '';
+
+            if (linkSocket && linkSocket.readyState === WebSocket.OPEN) {
+                linkSocket.send(JSON.stringify({ type: 'user_message', text }));
+                showTyping();
+            } else {
+                appendChat('system', '还没连上 Python，消息没有发出去');
+            }
+        }
+
+        document.getElementById('chat-send').addEventListener('click', sendChat);
+        chatInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.isComposing) {
+                event.preventDefault();
+                sendChat();
+            }
+        });
+        document.getElementById('chat-toggle').addEventListener('click', () => {
+            chatPanel.classList.toggle('collapsed');
+            document.getElementById('chat-toggle').textContent =
+                chatPanel.classList.contains('collapsed') ? '+' : '—';
+        });
+
+        connectLink();
+    </script>
+</body>
+</html>
